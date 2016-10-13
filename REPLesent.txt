@@ -1,0 +1,295 @@
+| \gScalaCheck
+
+| Lukasz Drygala
+---
+| Property-based testing
+
+--
+traditional test verify behavior based on specific data points checked by the test
+--
+
+property is a high-level specification of behavior that should hold for a range of data points
+---
+| \g sbt
+
+| libraryDependencies += "org.scalacheck" %% "scalacheck" % "1.13.2" % "test"
+---
+| \gProperties
+
+```
+import org.scalacheck.Prop.forAll
+
+val associative = forAll { (a:Int, b:Int) =>
+  a + b == b + a
+}
+associative.check
+
+val reverseList = forAll { l: List[String] =>
+  l.reverse.reverse == l
+}
+reverseList.check
+
+val concatString = forAll { (s1: String, s2: String) =>
+  (s1 + s2).endsWith(s2)
+}
+concatString.check
+```
+
+---
+| \gProperties
+
+```
+import org.scalacheck.Test.Parameters
+
+associative.check(Parameters.default.withMinSuccessfulTests(500))
+```
+---
+| \g Conditional Properties
+
+```
+import org.scalacheck.Prop.BooleanOperators
+
+val greater = forAll {
+  (a:Int, b:Int) => (b > 0) ==> (a + b > a)
+}
+
+greater.check
+```
+---
+| \g Conditional Properties
+
+```
+import org.scalacheck.Arbitrary.arbitrary
+
+val greater = forAll(arbitrary[Int], arbitrary[Int].suchThat(_ > 0)) {
+  (a:Int, b:Int) => (a + b > a)
+}
+greater.check
+
+val square = forAll(arbitrary[Int] :| "n") { n =>
+  math.sqrt(n * n) == n
+}
+square.check
+```
+---
+| \g Generators
+
+```
+import org.scalacheck.Gen
+
+Gen.choose(10,20)
+Gen.oneOf('A', 'E', 'I', 'O', 'U', 'Y')
+Gen.frequency(
+  (3, 'A'),
+  (4, 'E'),
+  (2, 'I'),
+  (3, 'O'),
+  (1, 'U'),
+  (1, 'Y')
+)
+Gen.const(List.empty)
+Gen.containerOf[List,Int](Gen.oneOf(1, 3, 5))
+Gen.containerOfN[List,Int](10,Gen.choose(0,100))
+```
+---
+| \g Generators
+
+```
+import org.scalacheck.Arbitrary.arbitrary
+
+val evenInt = arbitrary[Int].suchThat(_ % 2 == 0)
+
+val evenIntSum = forAll(evenInt,evenInt) {
+  (a:Int, b:Int) => (a + b) % 2 == 0
+}
+
+evenIntSum.check
+```
+---
+| \g Generators
+
+```
+import org.scalacheck.Gen
+import org.scalacheck.Gen._
+import org.scalacheck.Arbitrary._
+
+sealed abstract class Tree
+case class Node(left: Tree, right: Tree, v: Int) extends Tree
+case object Leaf extends Tree
+
+val leafGen = const(Leaf)
+val nodeGen = for {
+  v <- arbitrary[Int]
+  l <- treeGen
+  r <- treeGen
+} yield Node(l,r,v)
+
+def treeGen: Gen[Tree] = oneOf(leafGen, nodeGen)
+```
+---
+| \g Generators - like a boss
+
+libraryDependencies ++= Seq(
+    "com.chuusai" %% "shapeless" % "2.3.2",
+    "com.github.alexarchambault" %% "scalacheck-shapeless_1.13" % "1.1.1"
+    )
+
+```
+import org.scalacheck.Shapeless._
+
+val treeGenByShapeless = arbitrary[Tree]
+```
+---
+| \g ScalaCheck
+
+```
+import org.scalacheck.Properties
+import org.scalacheck.Prop.forAll
+
+object StringSpecification extends Properties("String") {
+
+  property("associative") = forAll { (s1: String, s2: String) =>
+    (s1 + s2) == (s2 + s1)
+  }
+}
+```
+---
+| \g ScalaCheck with ScalaTest
+
+
+```
+class StringTest extends FlatSpec with Matchers with PropertyChecks {
+  "String" should "be associative" in {
+    forAll { (s1:String, s2:String) =>
+      (s1 + s2) == (s2 + s1)
+    }
+  }
+}
+```
+---
+| \g ScalaCheck with Specs2
+
+```
+object StringPropertySpec extends Specification with ScalaCheck {
+
+  "Strings" should {
+    "be associative" ! check { (s1:String, s2:String) =>
+      (s1 + s2) == (s2 + s1)
+  }
+}
+```
+---
+| \g Use case - Bank Transfer
+
+```
+case class Account(accNo: Long, balance: BigDecimal) {
+  def withBalancePlus(amount: BigDecimal): Account = ???
+
+  def withBalanceMinus(amount: BigDecimal) = ???
+}
+
+case class Bank(accounts: Map[Long, Account]) {
+
+  def transfer(from: Long, to: Long, amount: BigDecimal): Bank = {
+    val modifiedFrom = accounts(from).withBalanceMinus(amount)
+    val modifiedTo = accounts(to).withBalancePlus(amount)
+    val newAccounts = accounts
+      .updated(from, modifiedFrom)
+      .updated(to, modifiedTo)
+    new Bank(newAccounts)
+  }
+
+  def totalMoney = accounts.values.map(_.balance).sum
+}
+```
+---
+| \g Use case - Bank Transfer
+
+```
+case class Transfer(from: Long, to: Long, amount: BigDecimal)
+
+val transferGen = for {
+  f <- arbitrary[Long]
+  t <- arbitrary[Long]
+  a <- posNum[Double]
+} yield Transfer(f,t,a)
+
+val accountGen = for {
+  accNo <- arbitrary[Long]
+  balance <- posNum[Double]
+} yield Account(accNo, balance)
+
+val bankGen = containerOfN[List, Account](1000, accountGen)
+                .flatMap(as => new Bank(as.map(a => a.accNo -> a).toMap))
+```
+---
+| \g Use case - Bank Transfer
+
+```
+val bankProp = forAll(bankGen, listOf(transferGen)) {
+  (bank: Bank, transfers: List[Transfer]) =>
+    val bankAfterTransfers = transfers.foldLeft(bank) { (curBank, transfer) =>
+      curBank.transfer(transfer.from, transfer.to, transfer.amount)
+    }
+    bank.totalMoney == bankAfterTransfers.totalMoney
+}
+```
+---
+| \g Use case - Cats
+
+```
+import cats._
+import cats.implicits._
+import org.scalacheck.{Arbitrary, Properties, Prop}
+
+object SemigroupSpec extends Properties("Semigroup") {
+
+  property("Int is associative") = associativeLaw[Int]
+  property("String is associative") = associativeLaw[String]
+  property("List[Option[Int]]") = associativeLaw[List[Option[Int]]]
+
+  def associativeLaw[A](implicit ev: Semigroup[A], a: Arbitrary[A]) = {
+    Prop.forAll { (a: A, b: A, c: A) =>
+      ev.combine(ev.combine(a, b), c) == (ev.combine(a, ev.combine(b, c)))
+    }
+  }
+}
+```
+---
+| \g Exercise
+
+```
+trait Heap {
+  type H // type of a heap
+  type A // type of an element
+  def ord: Ordering[A] // ordering on elements
+
+  def empty: H // the empty heap
+  def isEmpty(h: H): Boolean // whether the given heap h is empty
+
+  def insert(x: A, h: H): H // the heap resulting from inserting x into h
+  def merge(h1: H, h2: H): H // the heap resulting from merging h1 and h2
+
+  def findMin(h: H): A // a minimum of the heap h
+  def deleteMin(h: H): H // a heap resulting from deleting a minimum of h
+}
+```
+---
+| \g Exercise
+
+--
+findMin(insert(A, empty)) == A
+
+--
+findMin(insert(A2, insert(A1, empty))) == Math.min(A1, A2)
+
+--
+deleteMin(insert(A1, empty)) == empty
+
+--
+findMin(merge(H1, H2)) == Math.min(findMin(H1), findMin(H2))
+
+--
+merge(H1,empty) == H1
+---
+| \g Thank you
